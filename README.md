@@ -3,7 +3,7 @@
 Composite [pi package](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent/docs/packages.md) bundling:
 
 - [pi-cursor-sdk](https://github.com/fitchmultz/pi-cursor-sdk) — Cursor provider extension
-- **plan-workflow** — local plan/execute workflow (`/plan`, `/planstat`, `/planexe`)
+- **plan-workflow** — local plan/execute workflow (`/plan`, `/planstat`, `/planexe`, `/planinstall`)
 
 One install gives you both extensions on any pi instance.
 
@@ -40,6 +40,8 @@ pi -e .
 ```
 
 Confirm `/plan`, `/planstat`, `/planexe` and Cursor models are available.
+
+Or run `/planinstall` from pi to fetch the latest tagged release and reload.
 
 ## Updating
 

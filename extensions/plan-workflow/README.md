@@ -11,6 +11,8 @@ Global pi extension providing a two-stage plan/execute flow with optional parall
 | `/planexe [notes]` | Execute `.pi/plan.md` with cursor/composer-2.5 fast, medium thinking. Optional notes, e.g. `/planexe skip tests`. |
 | `/planstat` | Show mode, plan path, and full saved plan contents. |
 | `/planclr` | Leave plan/execution mode and restore normal tools. |
+| `/planinstall` | Install latest `mamolli-pi-setup` from GitHub and reload pi. |
+| `/planverify` | Compare saved plan vs session execution (gpt-5.5 high). Read-only; asks before follow-up. |
 
 ## Planning mode
 
@@ -42,10 +44,22 @@ When the plan has disjoint workstreams:
 
 Requires a git repository. Without git, use serial implementation only.
 
+## Verification mode (`/planverify`)
+
+Read-only retrospective using gpt-5.5 with high thinking:
+
+1. Reads `.pi/plan.md` and the current session transcript.
+2. Produces a divergence report with recommendations for better future plans.
+3. Asks whether to follow up with a new planning pass for plan-workflow improvements.
+
+## Self-update (`/planinstall`)
+
+Resolves the latest git tag from GitHub, runs `pi install git:github.com/mamolli/mamolli-pi-setup@<tag>`, then reloads extensions.
+
 ## Install via mamolli-pi-setup
 
 ```bash
-pi install git:github.com/mamolli/mamolli-pi-setup@v2
+pi install git:github.com/mamolli/mamolli-pi-setup@v2.3
 ```
 
 Remove separate `npm:pi-cursor-sdk` from settings if using the composite package.

@@ -65,6 +65,10 @@ const SAFE_PLAN_BASH_PATTERNS = [
 const PLANEXE_TIP =
 	"Tip: pass constraints as args, e.g. /planexe skip tests or /planexe focus only on auth module";
 
+const SETUP_REPO = "github.com/mamolli/mamolli-pi-setup";
+const SETUP_PACKAGE = `git:${SETUP_REPO}`;
+const TRANSCRIPT_MAX_CHARS = 80_000;
+
 function planPath(cwd: string): string {
 	return join(cwd, ".pi", "plan.md");
 }
@@ -123,6 +127,79 @@ function clearPlan(cwd: string): boolean {
 
 function isSafePlanBash(command: string): boolean {
 	return SAFE_PLAN_BASH_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+function compareSemverTags(a: string, b: string): number {
+	const pa = a.slice(1).split(".").map((n) => parseInt(n, 10) || 0);
+	const pb = b.slice(1).split(".").map((n) => parseInt(n, 10) || 0);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+		if (diff !== 0) return diff;
+	}
+	return 0;
+}
+
+async function latestSetupTag(pi: ExtensionAPI): Promise<string> {
+	const result = await pi.exec(
+		"git",
+		["ls-remote", "--tags", "--refs", `https://${SETUP_REPO}.git`],
+		{ timeout: 30000 },
+	);
+	if (result.code !== 0) return "main";
+
+	const tags: string[] = [];
+	for (const line of result.stdout.split("\n")) {
+		const match = line.match(/refs\/tags\/(v[\d.]+)$/);
+		if (match) tags.push(match[1]);
+	}
+	if (tags.length === 0) return "main";
+	tags.sort(compareSemverTags);
+	return tags[0];
+}
+
+function messageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((block): block is TextContent => (block as TextContent).type === "text")
+		.map((block) => block.text)
+		.join("\n");
+}
+
+function sessionTranscript(ctx: ExtensionContext): string {
+	const lines: string[] = [];
+	let total = 0;
+
+	for (const entry of ctx.sessionManager.getBranch()) {
+		let line = "";
+		if (entry.type === "custom_message") {
+			const e = entry as { customType?: string; content?: string };
+			line = `[custom:${e.customType ?? "?"}] ${String(e.content ?? "").slice(0, 500)}`;
+		} else if (entry.type === "message" && "message" in entry) {
+			const msg = entry.message as {
+				role?: string;
+				content?: unknown;
+				toolName?: string;
+			};
+			if (msg.role === "user") {
+				line = `[user] ${messageText(msg.content).slice(0, 2000)}`;
+			} else if (msg.role === "assistant") {
+				line = `[assistant] ${assistantText(msg).slice(0, 2000)}`;
+			} else if (msg.role === "toolResult") {
+				line = `[tool:${msg.toolName ?? "?"}] ${messageText(msg.content).slice(0, 500)}`;
+			}
+		}
+
+		if (!line) continue;
+		if (total + line.length > TRANSCRIPT_MAX_CHARS) {
+			lines.push("[... transcript truncated ...]");
+			break;
+		}
+		lines.push(line);
+		total += line.length + 1;
+	}
+
+	return lines.join("\n");
 }
 
 function cursorBaseModelId(modelId: string): string {
@@ -193,11 +270,16 @@ const ParallelParams = Type.Object({
 export default function planWorkflow(pi: ExtensionAPI) {
 	let planning = false;
 	let executing = false;
+	let verifying = false;
 	let retainedPlan: string | undefined;
 
 	function setStatus(ctx: ExtensionContext) {
 		if (planning) {
 			ctx.ui.setStatus("plan-workflow", ctx.ui.theme.fg("warning", "plan:gpt-5.5"));
+			return;
+		}
+		if (verifying) {
+			ctx.ui.setStatus("plan-workflow", ctx.ui.theme.fg("warning", "verify:gpt-5.5 high"));
 			return;
 		}
 		if (executing) {
@@ -300,6 +382,53 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		]);
 	}
 
+	async function enterVerification(ctx: ExtensionContext) {
+		const plan = readPlan(ctx.cwd);
+		if (!plan) {
+			ctx.ui.notify(`No plan found at ${planPath(ctx.cwd)}. Run /plan first.`, "warning");
+			return;
+		}
+
+		planning = false;
+		executing = false;
+		verifying = true;
+		pi.setActiveTools(validTools(pi, PLAN_TOOLS));
+		await setModel(ctx, pi, PLAN_MODEL.provider, PLAN_MODEL.model);
+		pi.setThinkingLevel("high");
+		setStatus(ctx);
+
+		const transcript = sessionTranscript(ctx);
+		pi.sendUserMessage([
+			{
+				type: "text",
+				text: [
+					"[PLAN VERIFY MODE]",
+					"Compare the saved plan with what actually happened in this session.",
+					"Do not edit or write project files.",
+					"",
+					"Produce a Markdown verification report with:",
+					"1. Original plan summary",
+					"2. Observed execution summary (from session transcript)",
+					"3. Divergence table (planned vs actual)",
+					"4. Missed assumptions or surprises",
+					"5. Unnecessary, missing, or vague plan steps",
+					"6. Concrete recommendations for making better plans next time",
+					"7. Possible improvements to plan-workflow itself",
+					"",
+					"Saved plan:",
+					"```md",
+					plan,
+					"```",
+					"",
+					"Session transcript:",
+					"```",
+					transcript || "(empty session)",
+					"```",
+				].join("\n"),
+			},
+		]);
+	}
+
 	async function planexeHandler(args: string, ctx: ExtensionContext) {
 		await ctx.waitForIdle();
 		await enterExecution(ctx, args);
@@ -308,6 +437,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 	async function planclrHandler(_args: string, ctx: ExtensionContext) {
 		planning = false;
 		executing = false;
+		verifying = false;
 		retainedPlan = undefined;
 		pi.setActiveTools(validTools(pi, IMPLEMENT_TOOLS));
 		setStatus(ctx);
@@ -378,7 +508,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const plan = readPlan(ctx.cwd);
 			const statusLines = [
-				`mode: ${planning ? "planning" : executing ? "executing" : "idle"}`,
+				`mode: ${planning ? "planning" : executing ? "executing" : verifying ? "verifying" : "idle"}`,
 				`file: ${planPath(ctx.cwd)}`,
 				`saved plan: ${plan ? "yes" : "no"}`,
 			];
@@ -399,7 +529,41 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		handler: planclrHandler,
 	});
 
+	pi.registerCommand("planinstall", {
+		description: "Install latest mamolli-pi-setup from GitHub and reload pi",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify("Fetching latest tag...", "info");
+			const tag = await latestSetupTag(pi);
+			const spec = `${SETUP_PACKAGE}@${tag}`;
+			const result = await pi.exec("pi", ["install", spec], { timeout: 120000 });
+			if (result.code !== 0) {
+				ctx.ui.notify(`Install failed: ${result.stderr || result.stdout}`, "error");
+				return;
+			}
+			ctx.ui.notify(`Installed ${spec}. Reloading...`, "info");
+			await ctx.reload();
+		},
+	});
+
+	pi.registerCommand("planverify", {
+		description: "Compare saved plan vs session; gpt-5.5 high. Asks before follow-up improvements.",
+		handler: async (_args, ctx) => {
+			await ctx.waitForIdle();
+			await enterVerification(ctx);
+		},
+	});
+
 	pi.on("before_agent_start", async () => {
+		if (verifying) {
+			return {
+				message: {
+					customType: "plan-workflow-verify-context",
+					display: false,
+					content:
+						"[PLAN VERIFY MODE]\nYou are verifying plan vs execution. Read-only. Do not modify project files.",
+				},
+			};
+		}
 		if (!planning) return;
 		return {
 			message: {
@@ -411,19 +575,48 @@ export default function planWorkflow(pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event) => {
-		if (!planning) return;
+		if (!planning && !verifying) return;
 		if (event.toolName === "edit" || event.toolName === "write") {
-			return { block: true, reason: "Plan mode is read-only. Use /planexe after the plan is approved." };
+			const mode = verifying ? "Verify mode" : "Plan mode";
+			const hint = verifying ? "Use /planclr to exit." : "Use /planexe after the plan is approved.";
+			return { block: true, reason: `${mode} is read-only. ${hint}` };
 		}
 		if (event.toolName === "bash") {
 			const command = String((event.input as { command?: unknown }).command ?? "");
 			if (!isSafePlanBash(command)) {
-				return { block: true, reason: `Plan mode only allows read-only bash inspection commands. Blocked: ${command}` };
+				return { block: true, reason: `Read-only mode only allows inspection commands. Blocked: ${command}` };
 			}
 		}
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
+		if (verifying) {
+			const lastAssistant = [...event.messages].reverse().find((message) => message.role === "assistant");
+			const report = assistantText(lastAssistant);
+			if (report) {
+				pi.sendMessage(
+					{ customType: "plan-workflow-verify", content: report, display: true },
+					{ triggerTurn: false },
+				);
+			}
+			verifying = false;
+			setStatus(ctx);
+
+			if (!ctx.hasUI) return;
+
+			const follow = await ctx.ui.confirm(
+				"Follow up?",
+				"Do you want to work on the suggested improvements to the planning workflow?",
+			);
+			if (follow) {
+				await enterPlanning(
+					ctx,
+					"Based on the verification report, create a new implementation plan for improving plan-workflow.",
+				);
+			}
+			return;
+		}
+
 		if (!planning) return;
 		const lastAssistant = [...event.messages].reverse().find((message) => message.role === "assistant");
 		const text = assistantText(lastAssistant);
