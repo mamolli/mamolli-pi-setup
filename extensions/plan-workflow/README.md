@@ -1,27 +1,53 @@
 # Plan Workflow Extension
 
-Global pi extension providing a simple two-stage plan/execute flow.
+Global pi extension providing a two-stage plan/execute flow with optional parallel workers.
 
 ## Commands
 
-- `/plan <request>` - switch to `openai-codex/gpt-5.5`, enable read-only planning tools, ask for a plan, and save the final assistant response to `.pi/plan.md`. If `.pi/plan.md` already exists, prompts whether to keep it (default: No, which clears the saved plan).
-- `/plan` - enter planning mode without sending a request; the next user prompt will be treated as plan-building. Also checks for an existing plan with the same prompt.
-- `/plan-execute [notes]` - read `.pi/plan.md`, switch to `cursor/composer-2.5`, enable Cursor fast mode, set thinking to `medium`, restore implementation tools, and send the plan for implementation.
-- `/plan-status` - show mode, plan file path, and full saved plan contents.
-- `/plan-clear` - leave plan/execution mode and restore implementation tools.
+| Command | Description |
+|---------|-------------|
+| `/plan` | Enter planning mode (gpt-5.5). Next prompt builds a plan; if `.pi/plan.md` exists, asks whether to keep it (default: No, clears file). |
+| `/plan <request>` | Clear any saved plan and immediately start planning for `<request>`. |
+| `/planexe [notes]` | Execute `.pi/plan.md` with cursor/composer-2.5 fast, medium thinking. Optional notes, e.g. `/planexe skip tests`. |
+| `/plan-status` | Show mode, plan path, and full saved plan contents. |
+| `/planclr` | Leave plan/execution mode and restore normal tools. |
 
-## Behavior
+Deprecated aliases (one release): `/plan-execute` → `/planexe`, `/plan-clear` → `/planclr`.
 
-Planning mode is read-only from the model's perspective:
+## Planning mode
+
+Read-only from the model's perspective:
 
 - active tools: `read`, `bash`, `grep`, `find`, `ls`
-- `edit` and `write` are blocked defensively
-- bash is restricted to an allowlist of inspection commands
+- `edit` and `write` are blocked
+- bash restricted to inspection allowlist
+- extension writes `.pi/plan.md` after the planning response
 
-The extension itself is allowed to write `.pi/plan.md` after the planning response.
+Plans should include a **Parallelization** section when work can run in parallel.
 
-When entering plan mode with an existing `.pi/plan.md`, the extension asks whether to continue from that plan. **No** is the default (first option). Choosing No or canceling removes `.pi/plan.md` and starts fresh. Choosing Yes injects the saved plan as context for revision. In non-UI mode, the saved plan is cleared by default. Each planning response overwrites `.pi/plan.md` with the complete updated plan.
+## Execution mode
 
-Execution uses Composer 2.5 in Cursor fast mode with pi thinking set to `medium`.
+- Model: `cursor/composer-2.5` (fast), thinking `medium`
+- Tools: read, bash, edit, write, grep, find, ls, plus `plan_parallel_execute`
 
-Parallel/swarm implementation is not automated yet. The execution prompt asks composer to identify independent workstreams when they are clear; actual multi-agent fanout can be added later.
+The execution prompt instructs the agent to call `plan_parallel_execute` when the plan has clearly independent, non-overlapping workstreams.
+
+## Parallel workers (`plan_parallel_execute`)
+
+When the plan has disjoint workstreams:
+
+1. Main agent calls `plan_parallel_execute` with labeled workstreams and optional `paths` hints.
+2. Each worker runs in an isolated **git worktree** under `.pi/plan-workflow/worktrees/<label>`.
+3. Workers spawn separate `pi` subprocesses (composer-2.5, medium thinking).
+4. Logs are prefixed with `[label]` so parallel output is easy to follow.
+5. Patches are applied back to the main worktree sequentially.
+
+Requires a git repository. Without git, use serial implementation only.
+
+## Install via mamolli-pi-setup
+
+```bash
+pi install git:github.com/mamolli/mamolli-pi-setup@v2
+```
+
+Remove separate `npm:pi-cursor-sdk` from settings if using the composite package.

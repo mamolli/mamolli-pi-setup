@@ -10,7 +10,7 @@ One install gives you both extensions on any pi instance.
 ## Quick setup
 
 ```bash
-pi install git:github.com/mamolli/mamolli-pi-setup@v1
+pi install git:github.com/mamolli/mamolli-pi-setup@v2
 ```
 
 Merge into `~/.pi/agent/settings.json` (or copy from `settings.example.json`):
@@ -22,7 +22,7 @@ Merge into `~/.pi/agent/settings.json` (or copy from `settings.example.json`):
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "packages": [
-    "git:github.com/mamolli/mamolli-pi-setup@v1"
+    "git:github.com/mamolli/mamolli-pi-setup@v2"
   ]
 }
 ```

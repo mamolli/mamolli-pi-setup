@@ -2,11 +2,19 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
+import {
+	executeParallelWorkstreams,
+	type ParallelExecuteDetails,
+	type WorkstreamInput,
+} from "./parallel-workers.ts";
 
 const PLAN_MODEL = { provider: "openai-codex", model: "gpt-5.5" };
 const IMPLEMENT_MODEL = { provider: "cursor", model: "composer-2.5" };
 const IMPLEMENT_THINKING = "medium" as const;
 const CURSOR_FAST_ENTRY_TYPE = "cursor-fast-state";
+const PARALLEL_TOOL = "plan_parallel_execute";
 
 const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const IMPLEMENT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -53,6 +61,9 @@ const SAFE_PLAN_BASH_PATTERNS = [
 	/^\s*rg\b/,
 	/^\s*fd\b/,
 ];
+
+const PLANEXE_TIP =
+	"Tip: pass constraints as args, e.g. /planexe skip tests or /planexe focus only on auth module";
 
 function planPath(cwd: string): string {
 	return join(cwd, ".pi", "plan.md");
@@ -121,7 +132,7 @@ function cursorBaseModelId(modelId: string): string {
 
 async function forceCursorFast(pi: ExtensionAPI, ctx: ExtensionContext, modelId: string): Promise<void> {
 	if (pi.getFlag("cursor-no-fast") === true) {
-		ctx.ui.notify("Cursor fast is forced off by --cursor-no-fast; /plan-execute cannot enable fast Composer.", "warning");
+		ctx.ui.notify("Cursor fast is forced off by --cursor-no-fast; /planexe cannot enable fast Composer.", "warning");
 		return;
 	}
 
@@ -168,6 +179,17 @@ function planContextContent(retainedPlan?: string): string {
 	].join("\n");
 }
 
+const WorkstreamSchema = Type.Object({
+	label: Type.String({ description: "Short unique label for this worker (shown in logs)" }),
+	task: Type.String({ description: "Implementation task for this workstream" }),
+	paths: Type.Optional(Type.Array(Type.String({ description: "File paths or areas this worker should focus on" }))),
+});
+
+const ParallelParams = Type.Object({
+	workstreams: Type.Array(WorkstreamSchema),
+	notes: Type.Optional(Type.String({ description: "Extra constraints for all workers" })),
+});
+
 export default function planWorkflow(pi: ExtensionAPI) {
 	let planning = false;
 	let executing = false;
@@ -185,24 +207,33 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		ctx.ui.setStatus("plan-workflow", undefined);
 	}
 
+	function implementationTools(pi: ExtensionAPI): string[] {
+		return validTools(pi, [...IMPLEMENT_TOOLS, PARALLEL_TOOL]);
+	}
+
 	async function enterPlanning(ctx: ExtensionContext, goal?: string) {
-		const existingPlan = readPlan(ctx.cwd);
+		const hasGoal = Boolean(goal?.trim());
 		retainedPlan = undefined;
 		let clearedExisting = false;
 
-		if (existingPlan) {
-			if (ctx.hasUI) {
-				const choice = await ctx.ui.select("Existing plan found", [
-					"No, start fresh and clear saved plan",
-					"Yes, keep working on existing plan",
-				]);
-				if (choice?.startsWith("Yes")) {
-					retainedPlan = existingPlan;
-				} else {
-					if (clearPlan(ctx.cwd)) clearedExisting = true;
+		if (hasGoal) {
+			if (clearPlan(ctx.cwd)) clearedExisting = true;
+		} else {
+			const existingPlan = readPlan(ctx.cwd);
+			if (existingPlan) {
+				if (ctx.hasUI) {
+					const choice = await ctx.ui.select("Existing plan found", [
+						"No, start fresh and clear saved plan",
+						"Yes, keep working on existing plan",
+					]);
+					if (choice?.startsWith("Yes")) {
+						retainedPlan = existingPlan;
+					} else if (clearPlan(ctx.cwd)) {
+						clearedExisting = true;
+					}
+				} else if (clearPlan(ctx.cwd)) {
+					clearedExisting = true;
 				}
-			} else if (clearPlan(ctx.cwd)) {
-				clearedExisting = true;
 			}
 		}
 
@@ -212,6 +243,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		await setModel(ctx, pi, PLAN_MODEL.provider, PLAN_MODEL.model);
 		pi.setThinkingLevel("high");
 		setStatus(ctx);
+
 		const modeNote = retainedPlan
 			? " Continuing existing plan."
 			: clearedExisting
@@ -219,25 +251,11 @@ export default function planWorkflow(pi: ExtensionAPI) {
 				: "";
 		ctx.ui.notify(`Planning mode enabled. Plan will save to ${planPath(ctx.cwd)}.${modeNote}`, "info");
 
-		if (goal?.trim()) {
-			const request = goal.trim();
-			if (retainedPlan) {
-				pi.sendUserMessage(
-					[
-						"Continue or revise the existing saved plan for this request.",
-						"Output the complete updated plan. Do not modify project files.",
-						"",
-						`Request:\n${request}`,
-						"",
-						"Existing plan:",
-						"```md",
-						retainedPlan,
-						"```",
-					].join("\n"),
-				);
-			} else {
-				pi.sendUserMessage(`Create an implementation plan for this request. Do not modify project files.\n\nRequest:\n${request}`);
-			}
+		if (hasGoal) {
+			const request = goal!.trim();
+			pi.sendUserMessage(
+				`Create an implementation plan for this request. Do not modify project files.\n\nRequest:\n${request}`,
+			);
 		}
 	}
 
@@ -251,7 +269,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		planning = false;
 		executing = true;
 		retainedPlan = undefined;
-		pi.setActiveTools(validTools(pi, IMPLEMENT_TOOLS));
+		pi.setActiveTools(implementationTools(pi));
 		await setModel(ctx, pi, IMPLEMENT_MODEL.provider, IMPLEMENT_MODEL.model);
 		pi.setThinkingLevel(IMPLEMENT_THINKING);
 		await forceCursorFast(pi, ctx, IMPLEMENT_MODEL.model);
@@ -263,9 +281,13 @@ export default function planWorkflow(pi: ExtensionAPI) {
 				text: [
 					"Implement the saved plan using composer-2.5 fast with medium thinking.",
 					"Follow the plan in order, but adapt if the codebase requires it.",
-					"If the work has clearly independent parts, explicitly identify them before implementing; otherwise implement serially.",
+					"Read the plan's Parallelization section first.",
+					"If it lists clearly independent workstreams with disjoint file areas, call plan_parallel_execute with one workstream per label (include paths hints).",
+					"Only use plan_parallel_execute when workstreams do not overlap the same files.",
+					"Otherwise implement serially yourself.",
 					"Run relevant checks/tests when practical and summarize changed files at the end.",
 					notes?.trim() ? `Additional execution notes: ${notes.trim()}` : "",
+					PLANEXE_TIP,
 					"",
 					"Saved plan:",
 					"```md",
@@ -278,19 +300,82 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		]);
 	}
 
+	async function planexeHandler(args: string, ctx: ExtensionContext) {
+		await ctx.waitForIdle();
+		await enterExecution(ctx, args);
+	}
+
+	async function planclrHandler(_args: string, ctx: ExtensionContext) {
+		planning = false;
+		executing = false;
+		retainedPlan = undefined;
+		pi.setActiveTools(validTools(pi, IMPLEMENT_TOOLS));
+		setStatus(ctx);
+		ctx.ui.notify("Plan workflow disabled. Normal implementation tools restored.", "info");
+	}
+
+	pi.registerTool({
+		name: PARALLEL_TOOL,
+		label: "Plan parallel execute",
+		description:
+			"Run independent plan workstreams in parallel using labeled worker agents (git worktrees). Use only for disjoint file areas.",
+		parameters: ParallelParams,
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			return executeParallelWorkstreams(
+				ctx.cwd,
+				params.workstreams as WorkstreamInput[],
+				params.notes,
+				signal,
+				onUpdate,
+			);
+		},
+		renderCall(args, theme) {
+			const n = Array.isArray(args.workstreams) ? args.workstreams.length : 0;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("plan_parallel_execute ")) +
+					theme.fg("accent", `${n} workstream${n === 1 ? "" : "s"}`),
+				0,
+				0,
+			);
+		},
+		renderResult(result, { expanded }, theme) {
+			const details = result.details as ParallelExecuteDetails | undefined;
+			if (!details?.workers?.length) {
+				return new Text(theme.fg("muted", "No worker results"), 0, 0);
+			}
+			const lines = details.workers.map((w) => {
+				const icon = w.exitCode === -1 ? "⏳" : w.failed ? "✗" : "✓";
+				let line = `${icon} [${w.label}]`;
+				const last = w.logs.at(-1);
+				if (last) line += ` ${last.text}`;
+				if (expanded && w.summary) {
+					line += `\n  ${w.summary.split("\n")[0]?.slice(0, 120) ?? ""}`;
+				}
+				return line;
+			});
+			return new Text(lines.join("\n"), 0, 0);
+		},
+	});
+
 	pi.registerCommand("plan", {
-		description: "Enter planning mode with gpt-5.5; saves the generated plan to .pi/plan.md. Usage: /plan <request>",
-		handler: async (args, ctx) => {
-			await enterPlanning(ctx, args);
+		description: "Planning mode (gpt-5.5). /plan = enter mode; /plan <request> = clear old plan and plan anew",
+		handler: async (args, ctx) => enterPlanning(ctx, args),
+	});
+
+	pi.registerCommand("planexe", {
+		description: `Execute .pi/plan.md with composer-2.5 fast. Usage: /planexe [notes]. ${PLANEXE_TIP}`,
+		handler: planexeHandler,
+		getArgumentCompletions: (prefix) => {
+			const hints = ["skip tests", "focus only on", "serial only", "parallel if possible"];
+			return hints
+				.filter((h) => h.startsWith(prefix) || !prefix)
+				.map((h) => ({ value: h, label: h }));
 		},
 	});
 
 	pi.registerCommand("plan-execute", {
-		description: "Execute .pi/plan.md with cursor/composer-2.5 fast and medium thinking. Usage: /plan-execute [notes]",
-		handler: async (args, ctx) => {
-			await ctx.waitForIdle();
-			await enterExecution(ctx, args);
-		},
+		description: "Deprecated alias for /planexe",
+		handler: planexeHandler,
 	});
 
 	pi.registerCommand("plan-status", {
@@ -309,27 +394,22 @@ export default function planWorkflow(pi: ExtensionAPI) {
 			}
 
 			const content = [...statusLines, "", "--- saved plan ---", "", plan].join("\n");
-			pi.sendMessage(
-				{ customType: "plan-workflow-status", content, display: true },
-				{ triggerTurn: false },
-			);
+			pi.sendMessage({ customType: "plan-workflow-status", content, display: true }, { triggerTurn: false });
 			ctx.ui.notify("Plan status shown", "info");
 		},
 	});
 
-	pi.registerCommand("plan-clear", {
+	pi.registerCommand("planclr", {
 		description: "Leave planning/execution mode and restore normal tools",
-		handler: async (_args, ctx) => {
-			planning = false;
-			executing = false;
-			retainedPlan = undefined;
-			pi.setActiveTools(validTools(pi, IMPLEMENT_TOOLS));
-			setStatus(ctx);
-			ctx.ui.notify("Plan workflow disabled. Normal implementation tools restored.", "info");
-		},
+		handler: planclrHandler,
 	});
 
-	pi.on("before_agent_start", async (_event, _ctx) => {
+	pi.registerCommand("plan-clear", {
+		description: "Deprecated alias for /planclr",
+		handler: planclrHandler,
+	});
+
+	pi.on("before_agent_start", async () => {
 		if (!planning) return;
 		return {
 			message: {
@@ -343,7 +423,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 	pi.on("tool_call", async (event) => {
 		if (!planning) return;
 		if (event.toolName === "edit" || event.toolName === "write") {
-			return { block: true, reason: "Plan mode is read-only. Use /plan-execute after the plan is approved." };
+			return { block: true, reason: "Plan mode is read-only. Use /planexe after the plan is approved." };
 		}
 		if (event.toolName === "bash") {
 			const command = String((event.input as { command?: unknown }).command ?? "");
@@ -360,7 +440,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		if (!text) return;
 		const file = savePlan(ctx.cwd, text);
 		retainedPlan = text;
-		ctx.ui.notify(`Saved plan to ${file}. Run /plan-execute to implement.`, "info");
+		ctx.ui.notify(`Saved plan to ${file}. Run /planexe to implement.`, "info");
 	});
 
 	pi.on("session_start", async (_event, ctx) => {

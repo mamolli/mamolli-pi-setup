@@ -4,6 +4,6 @@
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "packages": [
-    "git:github.com/mamolli/mamolli-pi-setup@v1"
+    "git:github.com/mamolli/mamolli-pi-setup@v2"
   ]
 }
