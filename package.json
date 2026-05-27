@@ -1,0 +1,23 @@
+{
+  "name": "mamolli-pi-setup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Composite pi package: pi-cursor-sdk + plan-workflow",
+  "keywords": ["pi-package"],
+  "dependencies": {
+    "pi-cursor-sdk": "^0.1.20"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/plan-workflow/index.ts",
+      "./node_modules/pi-cursor-sdk/src/index.ts"
+    ]
+  }
+}
