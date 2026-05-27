@@ -3,14 +3,14 @@
 Composite [pi package](https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent/docs/packages.md) bundling:
 
 - [pi-cursor-sdk](https://github.com/fitchmultz/pi-cursor-sdk) — Cursor provider extension
-- **plan-workflow** — local plan/execute workflow (`/plan`, `/planstat`, `/planexe`, `/planinstall`)
+- **plan-workflow** — local plan/execute workflow (`/plan`, `/plan-show`, `/plan-run`, `/plan-check`, `/plan-update`)
 
 One install gives you both extensions on any pi instance.
 
 ## Quick setup
 
 ```bash
-pi install git:github.com/mamolli/mamolli-pi-setup@v2
+pi install git:github.com/mamolli/mamolli-pi-setup@v2.4
 ```
 
 Merge into `~/.pi/agent/settings.json` (or copy from `settings.example.json`):
@@ -22,7 +22,7 @@ Merge into `~/.pi/agent/settings.json` (or copy from `settings.example.json`):
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "packages": [
-    "git:github.com/mamolli/mamolli-pi-setup@v2"
+    "git:github.com/mamolli/mamolli-pi-setup@v2.4"
   ]
 }
 ```
@@ -39,16 +39,16 @@ npm install
 pi -e .
 ```
 
-Confirm `/plan`, `/planstat`, `/planexe` and Cursor models are available.
+Confirm `/plan`, `/plan-show`, `/plan-run` and Cursor models are available.
 
-Or run `/planinstall` from pi to fetch the latest tagged release and reload.
+Or run `/plan-update` from pi to fetch the latest tagged release and reload.
 
 ## Updating
 
 Tag a release in this repo, then:
 
 ```bash
-pi install git:github.com/mamolli/mamolli-pi-setup@v2
+pi install git:github.com/mamolli/mamolli-pi-setup@v2.4
 ```
 
 Or run `pi update --extensions` to reconcile pinned git refs.

@@ -62,8 +62,15 @@ const SAFE_PLAN_BASH_PATTERNS = [
 	/^\s*fd\b/,
 ];
 
-const PLANEXE_TIP =
-	"Tip: pass constraints as args, e.g. /planexe skip tests or /planexe focus only on auth module";
+const PLAN_RUN_TIP =
+	"Tip: pass constraints as args, e.g. /plan-run skip tests or /plan-run focus only on auth module";
+
+type PreviousState = {
+	tools: string[];
+	modelProvider?: string;
+	modelId?: string;
+	thinkingLevel: ReturnType<ExtensionAPI["getThinkingLevel"]>;
+};
 
 const SETUP_REPO = "github.com/mamolli/mamolli-pi-setup";
 const SETUP_PACKAGE = `git:${SETUP_REPO}`;
@@ -209,7 +216,7 @@ function cursorBaseModelId(modelId: string): string {
 
 async function forceCursorFast(pi: ExtensionAPI, ctx: ExtensionContext, modelId: string): Promise<void> {
 	if (pi.getFlag("cursor-no-fast") === true) {
-		ctx.ui.notify("Cursor fast is forced off by --cursor-no-fast; /planexe cannot enable fast Composer.", "warning");
+		ctx.ui.notify("Cursor fast is forced off by --cursor-no-fast; /plan-run cannot enable fast Composer.", "warning");
 		return;
 	}
 
@@ -272,6 +279,32 @@ export default function planWorkflow(pi: ExtensionAPI) {
 	let executing = false;
 	let verifying = false;
 	let retainedPlan: string | undefined;
+	let previousState: PreviousState | undefined;
+
+	function capturePreviousState(ctx: ExtensionContext) {
+		const model = ctx.model;
+		previousState = {
+			tools: [...pi.getActiveTools()],
+			modelProvider: model?.provider,
+			modelId: model?.id,
+			thinkingLevel: pi.getThinkingLevel(),
+		};
+	}
+
+	async function restorePreviousState(ctx: ExtensionContext) {
+		if (!previousState) {
+			pi.setActiveTools(validTools(pi, IMPLEMENT_TOOLS));
+			setStatus(ctx);
+			return;
+		}
+		pi.setActiveTools(previousState.tools);
+		if (previousState.modelProvider && previousState.modelId) {
+			await setModel(ctx, pi, previousState.modelProvider, previousState.modelId);
+		}
+		pi.setThinkingLevel(previousState.thinkingLevel);
+		previousState = undefined;
+		setStatus(ctx);
+	}
 
 	function setStatus(ctx: ExtensionContext) {
 		if (planning) {
@@ -319,6 +352,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 			}
 		}
 
+		capturePreviousState(ctx);
 		planning = true;
 		executing = false;
 		pi.setActiveTools(validTools(pi, PLAN_TOOLS));
@@ -348,6 +382,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 			return;
 		}
 
+		capturePreviousState(ctx);
 		planning = false;
 		executing = true;
 		retainedPlan = undefined;
@@ -369,7 +404,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 					"Otherwise implement serially yourself.",
 					"Run relevant checks/tests when practical and summarize changed files at the end.",
 					notes?.trim() ? `Additional execution notes: ${notes.trim()}` : "",
-					PLANEXE_TIP,
+					PLAN_RUN_TIP,
 					"",
 					"Saved plan:",
 					"```md",
@@ -389,6 +424,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 			return;
 		}
 
+		capturePreviousState(ctx);
 		planning = false;
 		executing = false;
 		verifying = true;
@@ -429,19 +465,9 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		]);
 	}
 
-	async function planexeHandler(args: string, ctx: ExtensionContext) {
+	async function planRunHandler(args: string, ctx: ExtensionContext) {
 		await ctx.waitForIdle();
 		await enterExecution(ctx, args);
-	}
-
-	async function planclrHandler(_args: string, ctx: ExtensionContext) {
-		planning = false;
-		executing = false;
-		verifying = false;
-		retainedPlan = undefined;
-		pi.setActiveTools(validTools(pi, IMPLEMENT_TOOLS));
-		setStatus(ctx);
-		ctx.ui.notify("Plan workflow disabled. Normal implementation tools restored.", "info");
 	}
 
 	pi.registerTool({
@@ -492,9 +518,9 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		handler: async (args, ctx) => enterPlanning(ctx, args),
 	});
 
-	pi.registerCommand("planexe", {
-		description: `Execute .pi/plan.md with composer-2.5 fast. Usage: /planexe [notes]. ${PLANEXE_TIP}`,
-		handler: planexeHandler,
+	pi.registerCommand("plan-run", {
+		description: `Execute .pi/plan.md with composer-2.5 fast. Usage: /plan-run [notes]. ${PLAN_RUN_TIP}`,
+		handler: planRunHandler,
 		getArgumentCompletions: (prefix) => {
 			const hints = ["skip tests", "focus only on", "serial only", "parallel if possible"];
 			return hints
@@ -503,7 +529,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("planstat", {
+	pi.registerCommand("plan-show", {
 		description: "Show plan workflow status, .pi/plan.md location, and full saved plan",
 		handler: async (_args, ctx) => {
 			const plan = readPlan(ctx.cwd);
@@ -524,13 +550,8 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("planclr", {
-		description: "Leave planning/execution mode and restore normal tools",
-		handler: planclrHandler,
-	});
-
-	pi.registerCommand("planinstall", {
-		description: "Install latest mamolli-pi-setup from GitHub and reload pi",
+	pi.registerCommand("plan-update", {
+		description: "Update mamolli-pi-setup from GitHub and reload pi",
 		handler: async (_args, ctx) => {
 			ctx.ui.notify("Fetching latest tag...", "info");
 			const tag = await latestSetupTag(pi);
@@ -545,7 +566,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("planverify", {
+	pi.registerCommand("plan-check", {
 		description: "Compare saved plan vs session; gpt-5.5 high. Asks before follow-up improvements.",
 		handler: async (_args, ctx) => {
 			await ctx.waitForIdle();
@@ -578,7 +599,9 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		if (!planning && !verifying) return;
 		if (event.toolName === "edit" || event.toolName === "write") {
 			const mode = verifying ? "Verify mode" : "Plan mode";
-			const hint = verifying ? "Use /planclr to exit." : "Use /planexe after the plan is approved.";
+			const hint = verifying
+				? "Verification mode exits automatically after the report."
+				: "Use /plan-run after the plan is approved.";
 			return { block: true, reason: `${mode} is read-only. ${hint}` };
 		}
 		if (event.toolName === "bash") {
@@ -600,7 +623,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 				);
 			}
 			verifying = false;
-			setStatus(ctx);
+			await restorePreviousState(ctx);
 
 			if (!ctx.hasUI) return;
 
@@ -617,13 +640,21 @@ export default function planWorkflow(pi: ExtensionAPI) {
 			return;
 		}
 
+		if (executing) {
+			executing = false;
+			await restorePreviousState(ctx);
+			return;
+		}
+
 		if (!planning) return;
 		const lastAssistant = [...event.messages].reverse().find((message) => message.role === "assistant");
 		const text = assistantText(lastAssistant);
 		if (!text) return;
 		const file = savePlan(ctx.cwd, text);
 		retainedPlan = text;
-		ctx.ui.notify(`Saved plan to ${file}. Run /planexe to implement.`, "info");
+		planning = false;
+		await restorePreviousState(ctx);
+		ctx.ui.notify(`Saved plan to ${file}. Run /plan-run to implement.`, "info");
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
