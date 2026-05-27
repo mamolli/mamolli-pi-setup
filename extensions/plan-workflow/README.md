@@ -9,7 +9,7 @@ Global pi extension providing a two-stage plan/execute flow with optional parall
 | `/plan` | Enter planning mode (gpt-5.5). Next prompt builds a plan; if `.pi/plan.md` exists, asks whether to keep it (default: No, clears file). |
 | `/plan <request>` | Clear any saved plan and immediately start planning for `<request>`. |
 | `/planexe [notes]` | Execute `.pi/plan.md` with cursor/composer-2.5 fast, medium thinking. Optional notes, e.g. `/planexe skip tests`. |
-| `/plan-status` | Show mode, plan path, and full saved plan contents. |
+| `/planstat` | Show mode, plan path, and full saved plan contents. |
 | `/planclr` | Leave plan/execution mode and restore normal tools. |
 
 ## Planning mode

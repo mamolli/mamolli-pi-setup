@@ -373,7 +373,7 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("plan-status", {
+	pi.registerCommand("planstat", {
 		description: "Show plan workflow status, .pi/plan.md location, and full saved plan",
 		handler: async (_args, ctx) => {
 			const plan = readPlan(ctx.cwd);
