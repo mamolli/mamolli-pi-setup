@@ -12,8 +12,6 @@ Global pi extension providing a two-stage plan/execute flow with optional parall
 | `/plan-status` | Show mode, plan path, and full saved plan contents. |
 | `/planclr` | Leave plan/execution mode and restore normal tools. |
 
-Deprecated aliases (one release): `/plan-execute` → `/planexe`, `/plan-clear` → `/planclr`.
-
 ## Planning mode
 
 Read-only from the model's perspective:

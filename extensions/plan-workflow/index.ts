@@ -373,11 +373,6 @@ export default function planWorkflow(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("plan-execute", {
-		description: "Deprecated alias for /planexe",
-		handler: planexeHandler,
-	});
-
 	pi.registerCommand("plan-status", {
 		description: "Show plan workflow status, .pi/plan.md location, and full saved plan",
 		handler: async (_args, ctx) => {
@@ -401,11 +396,6 @@ export default function planWorkflow(pi: ExtensionAPI) {
 
 	pi.registerCommand("planclr", {
 		description: "Leave planning/execution mode and restore normal tools",
-		handler: planclrHandler,
-	});
-
-	pi.registerCommand("plan-clear", {
-		description: "Deprecated alias for /planclr",
 		handler: planclrHandler,
 	});
 
